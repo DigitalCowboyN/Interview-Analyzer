@@ -8,9 +8,18 @@ numpy==1.23.1
 pandas==1.4.3
 pillow==11.1.0
 sympy==1.13.1
-torch==1.12.1
-torchaudio==0.12.1
-torchvision==0.13.1
 typing_extensions==4.12.2
 webvtt-py==0.4.6
 transformers==4.20.1
+accelerate==0.21.0
+
+# The important part: all in the 2.2.x family
+torch==2.2.0
+torchvision==0.17.0
+torchaudio==2.2.0
+
+pyannote.core==5.0
+pyannote.audio==3.3.2
+
+
+# Ensure FFmpeg >= 4.2 is installed via Dockerfile or system-level package manager.

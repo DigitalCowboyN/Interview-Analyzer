@@ -1,3 +1,7 @@
 # .gitignore
 env/
-Transcripts/
+data/
+.devcontainer/
+old_code/
+hugging_face_access_token.txt
+Data_Preprocessor.py
