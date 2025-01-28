@@ -2,39 +2,64 @@
 # src/align_transcript.py
 
 import pandas as pd
-from typing import Optional
-from pyannote.core import Annotation
-from datetime import datetime
-from .process_transcripts import convert_time_to_seconds
+from typing import List
 
-def align_diarization_with_transcript(
-    df_transcript: pd.DataFrame,
-    diarization_result: Annotation
-) -> pd.DataFrame:
+def align_diarization_with_transcript(transcript_df, speakers):
     """
-    Align the transcript DataFrame (with columns [Start, End, Text]) to speaker segments.
-    Adds a 'Speaker' column indicating which speaker (SPEAKER_00, SPEAKER_01, etc.).
+    Aligns speaker labels with transcript text lines.
+
+    Args:
+        transcript_df (pd.DataFrame): The transcript as a DataFrame with a 'Text' column.
+        speakers (List[str]): A list of speaker labels in sequential order.
+
+    Returns:
+        pd.DataFrame: DataFrame with 'Text' and 'Speaker' columns.
     """
-    # Convert start/end to numeric seconds
-    df_transcript["StartSec"] = df_transcript["Start"].apply(convert_time_to_seconds)
-    df_transcript["EndSec"] = df_transcript["End"].apply(convert_time_to_seconds)
+    if "Text" not in transcript_df.columns:
+        raise ValueError("Transcript DataFrame must contain a 'Text' column.")
 
-    # Flatten the diarization annotation into a list of segments
-    diarized_segments = []
-    for segment, _, speaker_label in diarization_result.itertracks(yield_label=True):
-        diarized_segments.append({
-            "start": segment.start,
-            "end": segment.end,
-            "speaker": speaker_label
-        })
+    # Assign speakers to text lines sequentially
+    transcript_df["Speaker"] = speakers[: len(transcript_df)]
+    return transcript_df
 
-    # For each transcript row, find which speaker segment covers its midpoint
-    def find_speaker(row):
-        midpoint = (row["StartSec"] + row["EndSec"]) / 2.0
-        for seg in diarized_segments:
-            if seg["start"] <= midpoint <= seg["end"]:
-                return seg["speaker"]
-        return "Unknown"
 
-    df_transcript["Speaker"] = df_transcript.apply(find_speaker, axis=1)
-    return df_transcript
+# def align_diarization_with_transcript(transcript_df: pd.DataFrame, diarization_results: List[dict]) -> pd.DataFrame:
+#     """
+#     Aligns diarized speaker segments with transcript text lines.
+
+#     Args:
+#         transcript_df (pd.DataFrame): The transcript as a DataFrame with a 'Text' column.
+#         diarization_results (List[dict]): List of diarization segments, each containing 'start', 'end', and 'speaker'.
+
+#     Returns:
+#         pd.DataFrame: DataFrame with 'Start', 'End', 'Text', and 'Speaker' columns.
+#     """
+#     if "Text" not in transcript_df.columns:
+#         raise ValueError("Transcript DataFrame must contain a 'Text' column.")
+
+#     # Initialize alignment result list
+#     aligned_rows = []
+
+#     # Flatten diarization results for easier processing
+#     diarization_segments = [
+#         {"start": segment["start"], "end": segment["end"], "speaker": segment["speaker"]}
+#         for segment in diarization_results
+#     ]
+
+#     # Initialize transcript and diarization pointers
+#     transcript_index = 0
+
+#     for segment in diarization_segments:
+#         segment_start = segment["start"]
+#         segment_end = segment["end"]
+#         speaker = segment["speaker"]
+
+#         # Group transcript lines into this diarization segment
+#         combined_text = []
+
+#         while transcript_index < len(transcript_df):
+#             text_line = transcript_df.iloc[transcript_index]
+#             text = text_line["Text"]
+
+#             # Add the text line to the current segment
+#             combined_text.append(text)

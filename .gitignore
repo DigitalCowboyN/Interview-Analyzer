@@ -6,3 +6,4 @@ old_code/
 hugging_face_access_token.txt
 Data_Preprocessor.py
 Prompts of Project Tracking.txt
+src/__pycache__/

@@ -1,14 +1,12 @@
 import os
 from pathlib import Path
 import pandas as pd
-from .process_transcripts import vtt_to_dataframe
-from .process_diarization import run_speaker_diarization
-from .align_transcripts import align_diarization_with_transcript
+import spacy
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import KMeans
+import whisper
 from .audio_conversion import convert_mp4a_to_wav_if_needed
-from src.classify_relevance import (
-    load_zero_shot_classifier,
-    classify_csv
-)
+from typing import List
 
 def ensure_directories_exist(*paths):
     """
@@ -21,166 +19,192 @@ def ensure_directories_exist(*paths):
     for path in paths:
         path.parent.mkdir(parents=True, exist_ok=True)
 
-def needs_rediarization(transcript_file, audio_file, aligned_csv_path):
+# Load SpaCy English model
+nlp = spacy.load("en_core_web_sm")
+
+def validate_audio(audio_file):
     """
-    Check if diarization needs to be rerun based on file modification times.
+    Validate that the audio file is in a proper format and readable.
 
     Args:
-        transcript_file (Path): Path to the transcript file.
-        audio_file (Path): Path to the audio file.
-        aligned_csv_path (Path): Path to the aligned CSV file.
+        audio_file (Path): Path to the audio file to validate.
 
     Returns:
-        bool: True if diarization needs to be rerun, False otherwise.
+        bool: True if the audio file is valid, False otherwise.
     """
-    if not aligned_csv_path.exists():
-        return True
-    aligned_mtime = aligned_csv_path.stat().st_mtime
-    transcript_mtime = transcript_file.stat().st_mtime if transcript_file.exists() else 0
-    audio_mtime = audio_file.stat().st_mtime if audio_file.exists() else 0
-    return (transcript_mtime > aligned_mtime) or (audio_mtime > aligned_mtime)
+    try:
+        import soundfile as sf
+        with sf.SoundFile(audio_file) as f:
+            print(f"Valid audio file: {audio_file}")
+    except Exception as e:
+        print(f"Invalid audio file: {audio_file}, error: {e}")
+        return False
+    return True
 
-def needs_reclassification(aligned_csv_path, classified_csv_path):
+def transcribe_audio(audio_file, transcript_path):
     """
-    Check if classification needs to be rerun based on file modification times.
+    Transcribe audio to text using Whisper and save the result.
 
     Args:
-        aligned_csv_path (Path): Path to the aligned CSV file.
-        classified_csv_path (Path): Path to the classified CSV file.
+        audio_file (Path): Path to the .wav audio file.
+        transcript_path (Path): Path to save the generated transcript file.
 
     Returns:
-        bool: True if classification needs to be rerun, False otherwise.
+        Path: Path to the saved transcript file.
     """
-    if not classified_csv_path.exists():
-        return True
-    aligned_mtime = aligned_csv_path.stat().st_mtime
-    classified_mtime = classified_csv_path.stat().st_mtime
-    return aligned_mtime > classified_mtime
+    print(f"Transcribing audio: {audio_file}")
+    model = whisper.load_model("small")
+    result = model.transcribe(str(audio_file))
+    with open(transcript_path, "w") as f:
+        f.write(result["text"])
+    print(f"Saved transcript to: {transcript_path}")
+    return transcript_path
 
-def convert_audio_if_needed(audio_folder):
+def split_text_into_chunks_with_punctuation(
+    text: str, max_words_per_chunk: int = 30
+) -> List[str]:
     """
-    Convert audio files from .mp4a to .wav if needed.
-
-    Args:
-        audio_folder (Path): Path to the directory containing audio files.
-    """
-    print("Checking and converting audio files if needed...")
-    convert_mp4a_to_wav_if_needed(audio_folder)
-
-def run_diarization_if_needed(transcript_file, audio_wav_file, aligned_csv):
-    """
-    Run diarization and alignment if necessary, and save the aligned CSV.
+    Split the text into chunks using end-of-sentence punctuation.
 
     Args:
-        transcript_file (Path): Path to the transcript file.
-        audio_wav_file (Path): Path to the .wav audio file.
-        aligned_csv (Path): Path to save the aligned CSV.
+        text (str): Unstructured text blob.
+        max_words_per_chunk (int): Maximum number of words per chunk.
 
     Returns:
-        pd.DataFrame: The aligned DataFrame.
+        List[str]: List of text chunks.
     """
-    if not transcript_file.exists():
-        print(f"No transcript found: {transcript_file}")
-        return None
+    import re
 
-    # Convert the transcript file to a DataFrame
-    df_transcript = vtt_to_dataframe(transcript_file)
+    # Split the text into sentences using punctuation as delimiters
+    sentences = re.split(r"(?<=[.!?]) +", text.strip())
 
-    if audio_wav_file.exists():
-        # Perform speaker diarization on the audio file
-        diarization_result = run_speaker_diarization(str(audio_wav_file))
-        # Align the transcript with the diarization results
-        df_aligned = align_diarization_with_transcript(df_transcript, diarization_result)
-    else:
-        print(f"Warning: No audio found for {audio_wav_file}. Skipping diarization.")
-        df_aligned = df_transcript.copy()
-        df_aligned["Speaker"] = "Unknown"
+    chunks, current_chunk, current_word_count = [], [], 0
+    for sentence in sentences:
+        word_count = len(sentence.split())
 
-    # Save the aligned DataFrame to a CSV file
-    df_aligned.to_csv(aligned_csv, index=False)
-    print(f"Saved aligned CSV to: {aligned_csv}")
-    return df_aligned
+        # Add sentence to the current chunk if it fits
+        if current_word_count + word_count <= max_words_per_chunk:
+            current_chunk.append(sentence)
+            current_word_count += word_count
+        else:
+            # Start a new chunk
+            chunks.append(" ".join(current_chunk))
+            current_chunk = [sentence]
+            current_word_count = word_count
 
-def classify_if_needed(aligned_csv, classified_csv, threshold=0.8):
+    # Add the last chunk
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+
+    # Debug: Print chunk sizes
+    print(f"Generated {len(chunks)} chunks with sizes: {[len(chunk.split()) for chunk in chunks]}")
+    return chunks
+
+def generate_embeddings(chunks):
     """
-    Run classification if necessary and save the classified CSV.
+    Generate embeddings for text chunks using Sentence Transformers.
 
     Args:
-        aligned_csv (Path): Path to the aligned CSV file.
-        classified_csv (Path): Path to save the classified CSV file.
-        threshold (float): Confidence threshold for classification.
-    """
-    if not aligned_csv.exists():
-        print(f"Aligned CSV not found: {aligned_csv}")
-        return None
+        chunks (List[str]): List of text chunks.
 
-    # Load the zero-shot classifier
-    classifier = load_zero_shot_classifier("facebook/bart-large-mnli")
-    # Perform classification and save results
-    classify_csv(
-        csv_path=aligned_csv,
-        classifier=classifier,
-        threshold=threshold,
-        output_path=classified_csv
-    )
-    print(f"Saved classified CSV to: {classified_csv}")
-
-def process_interview(interview_id: str, interviews_dir: Path):
+    Returns:
+        List[np.ndarray]: List of embedding vectors.
     """
-    Process a single interview by:
-    1. Converting audio (if needed).
-    2. Running diarization (if needed).
-    3. Aligning transcripts and diarization.
-    4. Running classification (if needed).
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    return model.encode(chunks)
+
+def cluster_embeddings(embeddings, num_speakers=2):
+    """
+    Cluster embeddings into speaker groups using K-Means clustering.
+
+    Args:
+        embeddings (List[np.ndarray]): List of embedding vectors.
+        num_speakers (int): Number of speakers to cluster.
+
+    Returns:
+        List[int]: Cluster labels for each chunk.
+    """
+    kmeans = KMeans(n_clusters=num_speakers, random_state=42)
+    return kmeans.fit_predict(embeddings)
+
+def label_speakers(chunks, labels):
+    """
+    Label text chunks with speaker identities based on clustering results.
+
+    Args:
+        chunks (List[str]): List of text chunks.
+        labels (List[int]): Cluster labels for each chunk.
+
+    Returns:
+        pd.DataFrame: DataFrame with text chunks and corresponding speaker labels.
+    """
+    return pd.DataFrame({"Text": chunks, "Speaker": [f"Speaker_{label}" for label in labels]})
+
+def process_interview(interview_id: str, interviews_dir: Path, num_speakers=2):
+    """
+    Process a single interview by clustering text chunks into speaker groups.
 
     Args:
         interview_id (str): Unique identifier for the interview.
         interviews_dir (Path): Path to the base directory containing interview data.
+        num_speakers (int): Number of speakers to identify.
     """
     print(f"Starting processing for interview ID: {interview_id}")
 
-    # Define paths for transcript, audio, aligned CSV, and classified CSV
-    transcript_file = interviews_dir / "transcripts" / f"{interview_id}.vtt"
-    audio_folder = interviews_dir / "audio"
-    audio_wav_file = audio_folder / f"{interview_id}.wav"
-    aligned_csv = interviews_dir / "aligned" / f"{interview_id}_aligned.csv"
-    classified_csv = interviews_dir / "classified" / f"{interview_id}_classified.csv"
+    # Paths for audio, transcript, and output files
+    audio_folder, audio_file = interviews_dir / "audio", interviews_dir / "audio" / f"{interview_id}.wav"
+    transcript_file, aligned_csv = interviews_dir / "transcripts" / f"{interview_id}.txt", interviews_dir / "aligned" / f"{interview_id}_aligned.csv"
 
-    # Ensure output directories exist
-    ensure_directories_exist(aligned_csv, classified_csv)
+    # Ensure output directory exists
+    ensure_directories_exist(aligned_csv)
 
-    # Step 1: Convert audio if needed
-    convert_audio_if_needed(audio_folder)
+    # Convert audio to .wav if needed
+    convert_mp4a_to_wav_if_needed(audio_folder)
 
-    # Step 2: Run diarization and alignment if needed
-    if needs_rediarization(transcript_file, audio_wav_file, aligned_csv):
-        run_diarization_if_needed(transcript_file, audio_wav_file, aligned_csv)
-    else:
-        print(f"Skipping diarization, using existing: {aligned_csv}")
+    # Validate audio file
+    if not validate_audio(audio_file):
+        print(f"Skipping invalid audio file: {audio_file}")
+        return
 
-    # Step 3: Run classification if needed
-    if needs_reclassification(aligned_csv, classified_csv):
-        classify_if_needed(aligned_csv, classified_csv)
-    else:
-        print(f"Skipping classification, using existing: {classified_csv}")
+    # Transcribe audio if transcript does not exist
+    if not transcript_file.exists():
+        transcribe_audio(audio_file, transcript_file)
 
-    print(f"Processing complete for interview ID: {interview_id}\n")
+    # Read and process the transcript
+    try:
+        with open(transcript_file, "r") as f:
+            text = f.read()
+        chunks = split_text_into_chunks_with_punctuation(text)
+    except Exception as e:
+        print(f"Error reading transcript file {transcript_file}: {e}")
+        return
+
+    # Generate embeddings and cluster them
+    try:
+        embeddings = generate_embeddings(chunks)
+        labels = cluster_embeddings(embeddings, num_speakers=num_speakers)
+        df_aligned = label_speakers(chunks, labels)
+    except Exception as e:
+        print(f"Error during clustering: {e}")
+        return
+
+    # Save the aligned DataFrame to a CSV file
+    try:
+        df_aligned.to_csv(aligned_csv, index=False)
+        print(f"Aligned CSV saved to: {aligned_csv}")
+    except Exception as e:
+        print(f"Error saving aligned CSV: {e}")
 
 def main():
     """
     Main entry point for processing all interviews.
+    Iterates over all transcript files in the directory and processes each.
     """
-    base_dir = Path(__file__).resolve().parent.parent
-    interviews_dir = base_dir / "data" / "interviews"
+    base_dir, interviews_dir = Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent.parent / "data" / "interviews"
+    transcripts_dir, all_transcripts = interviews_dir / "transcripts", sorted((interviews_dir / "transcripts").glob("*.txt"))
 
-    # Collect all transcripts in the transcripts directory
-    transcripts_dir = interviews_dir / "transcripts"
-    all_transcripts = sorted(transcripts_dir.glob("*.vtt"))
-
-    for transcript_path in all_transcripts:
-        # Extract the interview ID from the filename
-        interview_id = transcript_path.stem
-        process_interview(interview_id, interviews_dir)
+    for transcript_file in all_transcripts:
+        process_interview(transcript_file.stem, interviews_dir)
 
 if __name__ == "__main__":
     main()

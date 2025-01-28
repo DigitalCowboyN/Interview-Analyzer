@@ -5,23 +5,30 @@ from pyannote.audio import Pipeline
 from pyannote.core import Annotation
 import os
 
-def run_speaker_diarization(audio_path: str):
+def run_speaker_diarization(audio_path):
     """
-    Run pyannote.audio speaker diarization on the given audio file.
-    Returns a pyannote.core.Annotation with speaker segments.
+    Run speaker diarization on the audio file and return speaker labels.
+
+    Args:
+        audio_path (str): Path to the audio file.
+
+    Returns:
+        List[str]: A list of speaker labels in sequential order.
     """
-    # 1 Retrieve HF token from environment
-    HF_TOKEN = os.environ.get("HF_TOKEN", None)
-    print("HF_TOKEN is:", HF_TOKEN)
+    try:
+        print(f"Running diarization on: {audio_path}")
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token="your_huggingface_token")
+        diarization = pipeline(audio_path)
 
-    # 2 Instantiate the pipeline using the token (if any)
-    if HF_TOKEN:
-        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization", use_auth_token=HF_TOKEN)
-    else:
-        # If no token is set, the pipeline might fail if the model is gated
-        # or succeed if the model is freely available
-        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization")
+        # Extract speaker labels sequentially (ignoring timestamps)
+        speakers = []
+        for _, _, speaker in diarization.itertracks(yield_label=True):
+            speakers.append(speaker)
 
-    # 3 Run diarization
-    diarization_result = pipeline(audio_path)
-    return diarization_result
+        # Debug: Print speaker labels
+        print(f"Identified speakers: {speakers}")
+        return speakers
+
+    except Exception as e:
+        print(f"Error during diarization: {e}")
+        return None
