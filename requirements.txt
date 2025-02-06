@@ -10,7 +10,7 @@ pillow==11.1.0
 sympy==1.13.1
 typing_extensions==4.12.2
 webvtt-py==0.4.6
-transformers==4.20.1
+# transformers==4.20.1
 accelerate==0.21.0
 
 # The important part: all in the 2.2.x family
@@ -26,7 +26,11 @@ openai-whisper
 
 # Sentence Transformers and dependencies
 sentence-transformers==2.2.2
+hdbscan==0.8.33
 huggingface-hub>=0.14.1,<0.17.0
+
+# For LLaMA model
+# ctransformers==0.2.27
 
 # SpaCy for sentence tokenization
 spacy==3.5.4

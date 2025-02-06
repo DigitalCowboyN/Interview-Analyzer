@@ -1,23 +1,39 @@
-# Use an official Python runtime as a parent image
-FROM python:3.10
-# You can choose any version that suits your script
+FROM ghcr.io/ggerganov/llama.cpp:light
 
-# Set the working directory to /app
-WORKDIR /app
+#FROM python:3.10
 
-# Install FFmpeg (latest version for compatibility with Mac)
-# ffmpeg, sox, and libsndfile1 are commonly required
+# Set the working directory to your project path
+WORKDIR /workspaces/ai_data_preprocessor
+
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    sox \
-    libsndfile1 \
- && rm -rf /var/lib/apt/lists/*
+     ffmpeg \
+     sox \
+     libsndfile1 \
+     git \
+     build-essential \
+     cmake \
+     curl \
+     python3.10 \
+     python3.10-venv \
+     python3.10-dev \
+     python3-pip \
+  && update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 \
+  && ln -sf /usr/bin/pip3 /usr/bin/pip \
+  && rm -rf /var/lib/apt/lists/*
 
-# Copy the current directory contents into the container at /app
+# # Clone and build llama.cpp
+# # RUN git clone https://github.com/ggerganov/llama.cpp.git /opt/llama.cpp && \
+# #     cd /opt/llama.cpp && \
+# #     make
+
+# # Set llama.cpp as globally available
+ENV LD_LIBRARY_PATH="/app:$LD_LIBRARY_PATH"
+
+# Copy the project files
 COPY . .
 
-# Install any needed packages specified in requirements.txt
+# # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Run Data_Preprocessor.py when the container launches
+# # Command to run when the container starts
 CMD ["python", "src/main.py"]
